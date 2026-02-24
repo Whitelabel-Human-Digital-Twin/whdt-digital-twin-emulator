@@ -1,50 +1,81 @@
 package io.github.whdt.emulator.dt
 
 import com.hivemq.client.mqtt.MqttClient
+import com.hivemq.client.mqtt.datatypes.MqttQos
 import io.github.whdt.core.hdt.model.id.HdtId
-import io.github.whdt.core.hdt.model.property.Properties.singleValueProperty
-import io.github.whdt.core.hdt.model.property.Property
-import io.github.whdt.core.hdt.model.property.PropertyValue
-import io.github.whdt.core.serde.Stub
 import io.github.whdt.distributed.namespace.Namespace
-import kotlin.random.Random
+import java.io.File
+import java.util.*
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadLocalRandom
+import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
+import kotlin.time.Clock
 
 fun main(args: Array<String>) {
-    val mqttClient = MqttClient.builder()
-        .useMqttVersion5()
-        .identifier(System.getenv("MQTT_IDENTIFIER") ?: "whdt-digital-twin-emulator")
-        .serverHost(System.getenv("MQTT_HOST") ?: "localhost")
-        .serverPort((System.getenv("MQTT_PORT") ?: "1883").toInt())
-        .buildAsync()
-
-    val connectFuture = mqttClient.connect()
-    connectFuture.whenComplete { _, throwable ->
-        if (throwable != null) {
-            println("Failed to connect Mqtt client: ${throwable.message}")
-        } else {
-            println("Mqtt client connected!")
-        }
-    }.join()
-
-    val ids = (0 until 201).map { HdtId("hdt-$it") }
-    ids.forEach {
-        val property = generateTestProperty()
-        mqttClient
-            .publishWith()
-            .topic(Namespace.propertyUpdateNotificationTopic(it))
-            .payload(Stub.propertyJsonSerDe().serialize(property).toByteArray())
-            .send()
-        println("${it}: sent property update of value ${property.valueMap["value"]}")
+    val publishers = args[0].toInt()
+    val messagesPerPublisher = args[1].toInt()
+    val executor = Executors.newCachedThreadPool()
+    val clients = (0 until publishers).map {
+        MqttClient.builder()
+            .useMqttVersion5()
+            .identifier(System.getenv("MQTT_IDENTIFIER") ?: "whdt-digital-twin-emulator-${it}")
+            .serverHost(System.getenv("MQTT_HOST") ?: "localhost")
+            .serverPort((System.getenv("MQTT_PORT") ?: "1883").toInt())
+            .buildAsync()
     }
-    exitProcess(0)
-}
+    CompletableFuture.allOf(*clients.map { it.connect() }.toTypedArray()).join()
+    println("Connected $publishers clients")
 
-fun generateTestProperty(): Property {
-    return singleValueProperty(
-        id= "test-property",
-        name = "Test Property",
-        valueName = "value",
-        value = PropertyValue.DoublePropertyValue(Random.nextDouble(0.0, 1.0)),
+    val publishFutures = mutableListOf<CompletableFuture<*>>()
+    val csvRows = Collections.synchronizedList(mutableListOf<String>())
+    csvRows.add("dt_id,timestamp_at_send,timestamp_at_publish,payload_size")
+
+    clients.forEachIndexed { clientIdx, client ->
+        executor.submit {
+            val clientId = "whdt-dt-emulator-$clientIdx"
+
+            (0 until messagesPerPublisher).forEach { _ ->
+                val payloadBytes = "hdt-$clientId".toByteArray()
+                val payloadSize = payloadBytes.size
+
+                val jitterMs = ThreadLocalRandom.current().nextLong(0, 11)
+                if (jitterMs > 0) Thread.sleep(jitterMs)
+
+                val timestampAtSend = Clock.System.now()
+
+                val f = client.publishWith()
+                    .topic(Namespace.propertyUpdateNotificationTopic(HdtId("hdt-$clientId"))) // or your own mapping
+                    .qos(MqttQos.AT_LEAST_ONCE)
+                    .payload(payloadBytes)
+                    .send()
+
+                f.whenComplete { _, throwable ->
+                    val timestampAtPublish = Clock.System.now()
+                    if (throwable == null) {
+                        csvRows.add("hdt-$clientId,${timestampAtSend.toEpochMilliseconds()},${timestampAtPublish.toEpochMilliseconds()},$payloadSize")
+                    } else {
+                        // csvRows.add("$clientId,$seq,$timestampAtSend,ERROR,${payloadSize}")
+                        println("Publish failed client=$clientId: ${throwable.message}")
+                    }
+                }
+
+                publishFutures.add(f)
+            }
+        }
+    }
+    executor.shutdown()
+    executor.awaitTermination(1, TimeUnit.MINUTES)
+    CompletableFuture.allOf(*publishFutures.toTypedArray()).join()
+
+    File("mqtt_metrics.csv").writeText(
+        csvRows.joinToString("\n")
     )
+    println("CSV written to mqtt_metrics.csv")
+
+    clients[0].publishWith().topic("${Namespace.MQTT_PREFIX}/benchmark/done").send().join()
+
+    clients.forEach { it.disconnect() }
+    exitProcess(0)
 }

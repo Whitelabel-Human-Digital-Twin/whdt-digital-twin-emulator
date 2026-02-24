@@ -1,6 +1,7 @@
 plugins {
     kotlin("jvm") version "2.3.0"
     kotlin("plugin.serialization") version "2.2.0"
+    application
 }
 
 group = "io.github.whdt"
@@ -27,6 +28,10 @@ dependencies {
 
 kotlin {
     jvmToolchain(23)
+}
+
+application {
+    mainClass.set("io.github.whdt.emulator.dt.MainKt")
 }
 
 tasks.test {
