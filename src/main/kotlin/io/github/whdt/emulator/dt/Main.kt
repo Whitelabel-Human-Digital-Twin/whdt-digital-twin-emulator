@@ -88,7 +88,7 @@ fun executeRun(
                 val timestampAtSend = Clock.System.now()
 
                 val f = client.publishWith()
-                    .topic(Namespace.propertyUpdateNotificationTopic(HdtId("hdt-$clientId"))) // or your own mapping
+                    .topic(Namespace.propertyUpdateNotificationTopic(HdtId("hdt-$clientId"), "test")) // or your own mapping
                     .qos(MqttQos.AT_LEAST_ONCE)
                     .payload(payloadBytes)
                     .send()

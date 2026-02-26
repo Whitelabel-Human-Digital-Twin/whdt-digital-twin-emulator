@@ -20,8 +20,8 @@ repositories {
 
 dependencies {
     testImplementation(kotlin("test"))
-    implementation("io.github.whdt:whdt-core:0.3.0")
-    implementation("io.github.whdt:whdt-distributed:0.1.0")
+    implementation("io.github.whdt:whdt-core:0.4.0")
+    implementation("io.github.whdt:whdt-distributed:0.2.0")
     implementation("com.hivemq:hivemq-mqtt-client:1.3.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 }
