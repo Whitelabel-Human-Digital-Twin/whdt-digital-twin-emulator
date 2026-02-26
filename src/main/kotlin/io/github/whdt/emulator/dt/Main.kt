@@ -2,11 +2,13 @@ package io.github.whdt.emulator.dt
 
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
+import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import io.github.whdt.core.hdt.model.id.HdtId
 import io.github.whdt.distributed.namespace.Namespace
 import java.io.File
 import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
@@ -16,6 +18,9 @@ import kotlin.time.Clock
 fun main(args: Array<String>) {
     val publishers = args[0].toInt()
     val messagesPerPublisher = args[1].toInt()
+    val nRuns = args[2].toInt()
+    val waitBetweenRuns = 2000L
+    val maxJitter = 51L
     val executor = Executors.newCachedThreadPool()
     val clients = (0 until publishers).map {
         MqttClient.builder()
@@ -30,41 +35,21 @@ fun main(args: Array<String>) {
 
     val publishFutures = mutableListOf<CompletableFuture<*>>()
     val csvRows = Collections.synchronizedList(mutableListOf<String>())
-    csvRows.add("dt_id,timestamp_at_send,timestamp_at_publish,payload_size")
+    csvRows.add("dt_id,timestamp_at_send,timestamp_at_publish,payload_size, n_run")
 
-    clients.forEachIndexed { clientIdx, client ->
-        executor.submit {
-            val clientId = "whdt-dt-emulator-$clientIdx"
-
-            (0 until messagesPerPublisher).forEach { _ ->
-                val payloadBytes = "hdt-$clientId".toByteArray()
-                val payloadSize = payloadBytes.size
-
-                val jitterMs = ThreadLocalRandom.current().nextLong(0, 11)
-                if (jitterMs > 0) Thread.sleep(jitterMs)
-
-                val timestampAtSend = Clock.System.now()
-
-                val f = client.publishWith()
-                    .topic(Namespace.propertyUpdateNotificationTopic(HdtId("hdt-$clientId"))) // or your own mapping
-                    .qos(MqttQos.AT_LEAST_ONCE)
-                    .payload(payloadBytes)
-                    .send()
-
-                f.whenComplete { _, throwable ->
-                    val timestampAtPublish = Clock.System.now()
-                    if (throwable == null) {
-                        csvRows.add("hdt-$clientId,${timestampAtSend.toEpochMilliseconds()},${timestampAtPublish.toEpochMilliseconds()},$payloadSize")
-                    } else {
-                        // csvRows.add("$clientId,$seq,$timestampAtSend,ERROR,${payloadSize}")
-                        println("Publish failed client=$clientId: ${throwable.message}")
-                    }
-                }
-
-                publishFutures.add(f)
-            }
-        }
+    (1 until nRuns + 1).forEach {
+        executeRun(
+            clients,
+            executor,
+            messagesPerPublisher,
+            maxJitter,
+            it,
+            csvRows,
+            publishFutures,
+        )
+        Thread.sleep(waitBetweenRuns)
     }
+
     executor.shutdown()
     executor.awaitTermination(1, TimeUnit.MINUTES)
     CompletableFuture.allOf(*publishFutures.toTypedArray()).join()
@@ -78,4 +63,47 @@ fun main(args: Array<String>) {
 
     clients.forEach { it.disconnect() }
     exitProcess(0)
+}
+
+fun executeRun(
+    clients: List<Mqtt5AsyncClient>,
+    executor: ExecutorService,
+    messagesPerPublisher: Int,
+    maxJitter: Long,
+    nRun: Int,
+    csvRows: MutableList<String>,
+    publishFutures: MutableList<CompletableFuture<*>>
+) {
+    clients.forEachIndexed { clientIdx, client ->
+        executor.submit {
+            val clientId = "whdt-dt-emulator-$clientIdx"
+
+            (0 until messagesPerPublisher).forEach { _ ->
+                val payloadBytes = "hdt-$clientId".toByteArray()
+                val payloadSize = payloadBytes.size
+
+                val jitterMs = ThreadLocalRandom.current().nextLong(0, maxJitter)
+                if (jitterMs > 0) Thread.sleep(jitterMs)
+
+                val timestampAtSend = Clock.System.now()
+
+                val f = client.publishWith()
+                    .topic(Namespace.propertyUpdateNotificationTopic(HdtId("hdt-$clientId"))) // or your own mapping
+                    .qos(MqttQos.AT_LEAST_ONCE)
+                    .payload(payloadBytes)
+                    .send()
+
+                f.whenComplete { _, throwable ->
+                    val timestampAtPublish = Clock.System.now()
+                    if (throwable == null) {
+                        csvRows.add("hdt-$clientId,${timestampAtSend.toEpochMilliseconds()},${timestampAtPublish.toEpochMilliseconds()},$payloadSize, $nRun")
+                    } else {
+                        csvRows.add("$clientId,$timestampAtSend,ERROR,$payloadSize, $nRun")
+                        println("Publish failed client=$clientId: ${throwable.message}")
+                    }
+                }
+                publishFutures.add(f)
+            }
+        }
+    }
 }
