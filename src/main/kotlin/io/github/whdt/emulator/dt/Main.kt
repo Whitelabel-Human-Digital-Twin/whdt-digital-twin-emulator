@@ -58,7 +58,7 @@ fun main(args: Array<String>) {
     File("mqtt_metrics.csv").writeText(
         csvRows.joinToString("\n")
     )
-    println("CSV written to mqtt_metrics.csv")
+    println("CSV written to mqtt_send_metrics.csv")
 
     clients[0].publishWith().topic("${Namespace.MQTT_PREFIX}/benchmark/done").send().join()
 
