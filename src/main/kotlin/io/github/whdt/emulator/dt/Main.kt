@@ -47,6 +47,7 @@ fun main(args: Array<String>) {
             csvRows,
             publishFutures,
         )
+        clients[0].publishWith().topic("${Namespace.MQTT_PREFIX}/benchmark/end_run").send().join()
         Thread.sleep(waitBetweenRuns)
     }
 
