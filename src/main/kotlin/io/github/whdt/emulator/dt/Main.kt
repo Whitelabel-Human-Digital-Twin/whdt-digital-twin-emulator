@@ -33,11 +33,11 @@ fun main(args: Array<String>) {
     CompletableFuture.allOf(*clients.map { it.connect() }.toTypedArray()).join()
     println("Connected $publishers clients")
 
-    val publishFutures = mutableListOf<CompletableFuture<*>>()
     val csvRows = Collections.synchronizedList(mutableListOf<String>())
     csvRows.add("dt_id,timestamp_at_send,timestamp_at_publish,payload_size, n_run")
 
     (1 until nRuns + 1).forEach {
+        val publishFutures = mutableListOf<CompletableFuture<*>>()
         executeRun(
             clients,
             executor,
@@ -47,15 +47,15 @@ fun main(args: Array<String>) {
             csvRows,
             publishFutures,
         )
+        CompletableFuture.allOf(*publishFutures.toTypedArray()).join()
         clients[0].publishWith().topic("${Namespace.MQTT_PREFIX}/benchmark/end_run").send().join()
         Thread.sleep(waitBetweenRuns)
     }
 
     executor.shutdown()
     executor.awaitTermination(1, TimeUnit.MINUTES)
-    CompletableFuture.allOf(*publishFutures.toTypedArray()).join()
 
-    File("mqtt_metrics.csv").writeText(
+    File("mqtt_send_metrics.csv").writeText(
         csvRows.joinToString("\n")
     )
     println("CSV written to mqtt_send_metrics.csv")
